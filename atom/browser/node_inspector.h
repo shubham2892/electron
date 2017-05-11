@@ -13,7 +13,6 @@ namespace atom {
 class NodeInspector {
  public:
   explicit NodeInspector(node::Environment* env);
-  ~NodeInspector();
   void Start();
 
  private:

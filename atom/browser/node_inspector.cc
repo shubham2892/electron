@@ -5,6 +5,7 @@
 #include "atom/browser/node_inspector.h"
 
 #include "atom/common/node_includes.h"
+#include "base/command_line.h"
 
 namespace atom {
 
@@ -12,14 +13,13 @@ NodeInspector::NodeInspector(node::Environment* env) :
     agent_(new node::inspector::Agent(env)) {
 }
 
-NodeInspector::~NodeInspector() {
-  agent_->Stop();
-}
-
 void NodeInspector::Start() {
   node::DebugOptions options;
-  options.EnableDebugAgent(node::DebugAgentType::kInspector);
-  agent_->Start(gin::V8Platform::Get(), nullptr, options);
+  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
+  for (const auto& arg : cmd->argv())
+    options.ParseOption(arg);
+  if (options.inspector_enabled())
+    agent_->Start(gin::V8Platform::Get(), nullptr, options);
 }
 
 }  // namespace atom

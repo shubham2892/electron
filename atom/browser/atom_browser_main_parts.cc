@@ -136,6 +136,7 @@ void AtomBrowserMainParts::PostEarlyInitialization() {
 
   // Support the "--inspect" switch.
   node_inspector_.reset(new NodeInspector(env));
+  node_inspector_->Start();
 
   // Add Electron extended APIs.
   atom_bindings_->BindTo(js_env_->isolate(), env->process_object());
