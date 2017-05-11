@@ -10,11 +10,6 @@
 #include <stddef.h>
 #include <vector>
 
-#if !HAVE_INSPECTOR
-#error("This header can only be used when inspector is enabled")
-#endif
-
-
 // Forward declaration to break recursive dependency chain with src/env.h.
 namespace node {
 class Environment;

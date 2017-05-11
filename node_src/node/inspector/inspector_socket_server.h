@@ -9,10 +9,6 @@
 #include <string>
 #include <vector>
 
-#if !HAVE_INSPECTOR
-#error("This header can only be used when inspector is enabled")
-#endif
-
 namespace node {
 namespace inspector {
 

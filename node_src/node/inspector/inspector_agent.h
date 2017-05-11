@@ -5,10 +5,6 @@
 
 #include <stddef.h>
 
-#if !HAVE_INSPECTOR
-#error("This header can only be used when inspector is enabled")
-#endif
-
 #include "node_debug_options.h"
 
 // Forward declaration to break recursive dependency chain with src/env.h.
