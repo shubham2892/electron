@@ -35,7 +35,7 @@ enum class TransportAction {
 
 class InspectorIo {
  public:
-  InspectorIo(node::Environment* env, v8::Platform* platform,
+  InspectorIo(Agent* agent, node::Environment* env, v8::Platform* platform,
               const std::string& path, const DebugOptions& options);
 
   // Start the inspector agent thread
@@ -92,6 +92,7 @@ class InspectorIo {
   bool shutting_down_;
   State state_;
   node::Environment* parent_env_;
+  Agent* agent_;
 
   uv_async_t io_thread_req_;
   uv_async_t main_thread_req_;

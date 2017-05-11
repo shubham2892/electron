@@ -4,9 +4,9 @@
 #include "env.h"
 #include "env-inl.h"
 #include "node.h"
-#include "node_crypto.h"
 #include "node_mutex.h"
 #include "v8-inspector.h"
+#include "v8-platform.h"
 #include "util.h"
 #include "zlib.h"
 
@@ -16,6 +16,7 @@
 #include <string.h>
 #include <vector>
 
+#include "third_party/boringssl/src/include/openssl/rand.h"
 
 namespace node {
 namespace inspector {
@@ -41,8 +42,7 @@ std::string GetProcessTitle() {
 // Used ver 4 - with numbers
 std::string GenerateID() {
   uint16_t buffer[8];
-  CHECK(crypto::EntropySource(reinterpret_cast<unsigned char*>(buffer),
-                              sizeof(buffer)));
+  CHECK(RAND_bytes(reinterpret_cast<unsigned char*>(buffer), sizeof(buffer)));
 
   char uuid[256];
   snprintf(uuid, sizeof(uuid), "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",
@@ -153,11 +153,11 @@ class DispatchOnInspectorBackendTask : public v8::Task {
   InspectorIo* io_;
 };
 
-InspectorIo::InspectorIo(Environment* env, v8::Platform* platform,
+InspectorIo::InspectorIo(Agent* agent, Environment* env, v8::Platform* platform,
                          const std::string& path, const DebugOptions& options)
                          : options_(options), thread_(), delegate_(nullptr),
                            shutting_down_(false), state_(State::kNew),
-                           parent_env_(env), io_thread_req_(),
+                           parent_env_(env), agent_(agent), io_thread_req_(),
                            platform_(platform), dispatching_messages_(false),
                            session_id_(0), script_name_(path) {
   CHECK_EQ(0, uv_async_init(env->event_loop(), &main_thread_req_,
@@ -200,7 +200,7 @@ void InspectorIo::WaitForDisconnect() {
     Write(TransportAction::kStop, 0, StringView());
     fprintf(stderr, "Waiting for the debugger to disconnect...\n");
     fflush(stderr);
-    parent_env_->inspector_agent()->RunMessageLoop();
+    agent_->RunMessageLoop();
   }
 }
 
@@ -340,7 +340,7 @@ void InspectorIo::DispatchMessages() {
         fprintf(stderr, "Debugger attached.\n");
         session_delegate_ = std::unique_ptr<InspectorSessionDelegate>(
             new IoSessionDelegate(this));
-        parent_env_->inspector_agent()->Connect(session_delegate_.get());
+        agent_->Connect(session_delegate_.get());
         break;
       case InspectorAction::kEndSession:
         CHECK_NE(session_delegate_, nullptr);
@@ -349,11 +349,11 @@ void InspectorIo::DispatchMessages() {
         } else {
           state_ = State::kAccepting;
         }
-        parent_env_->inspector_agent()->Disconnect();
+        agent_->Disconnect();
         session_delegate_.reset();
         break;
       case InspectorAction::kSendMessage:
-        parent_env_->inspector_agent()->Dispatch(message);
+        agent_->Dispatch(message);
         break;
       }
     }
