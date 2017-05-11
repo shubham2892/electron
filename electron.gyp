@@ -244,6 +244,7 @@
       'include_dirs': [
         '.',
         'chromium_src',
+        'node_src',
         'brightray',
         'vendor/native_mate',
         # Include atom_natives.h.
