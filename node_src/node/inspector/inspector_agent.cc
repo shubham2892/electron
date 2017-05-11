@@ -14,10 +14,6 @@
 #include <string.h>
 #include <vector>
 
-#ifdef __POSIX__
-#include <unistd.h>  // setuid, getuid
-#endif  // __POSIX__
-
 namespace node {
 namespace inspector {
 namespace {
@@ -35,179 +31,65 @@ using v8_inspector::StringBuffer;
 using v8_inspector::StringView;
 using v8_inspector::V8Inspector;
 
-static uv_sem_t inspector_io_thread_semaphore;
-static uv_async_t start_inspector_thread_async;
-
 std::unique_ptr<StringBuffer> ToProtocolString(Isolate* isolate,
                                                Local<Value> value) {
   TwoByteValue buffer(isolate, value);
   return StringBuffer::create(StringView(*buffer, buffer.length()));
 }
 
-// Called from the main thread.
-void StartInspectorIoThreadAsyncCallback(uv_async_t* handle) {
-  static_cast<Agent*>(handle->data)->StartIoThread();
-}
+// void InspectorConsoleCall(Agent *agent, const v8::FunctionCallbackInfo<Value>& info) {
+//   Isolate* isolate = info.GetIsolate();
+//   HandleScope handle_scope(isolate);
+//   Local<Context> context = isolate->GetCurrentContext();
+//   CHECK_LT(2, info.Length());
+//   std::vector<Local<Value>> call_args;
+//   for (int i = 3; i < info.Length(); ++i) {
+//     call_args.push_back(info[i]);
+//   }
+//   Environment* env = Environment::GetCurrent(isolate);
+//   if (agent->enabled()) {
+//     Local<Value> inspector_method = info[0];
+//     CHECK(inspector_method->IsFunction());
+//     Local<Value> config_value = info[2];
+//     CHECK(config_value->IsObject());
+//     Local<Object> config_object = config_value.As<Object>();
+//     Local<String> in_call_key = FIXED_ONE_BYTE_STRING(isolate, "in_call");
+//     if (!config_object->Has(context, in_call_key).FromMaybe(false)) {
+//       CHECK(config_object->Set(context,
+//                                in_call_key,
+//                                v8::True(isolate)).FromJust());
+//       CHECK(!inspector_method.As<Function>()->Call(context,
+//                                                    info.Holder(),
+//                                                    call_args.size(),
+//                                                    call_args.data()).IsEmpty());
+//     }
+//     CHECK(config_object->Delete(context, in_call_key).FromJust());
+//   }
+//
+//   Local<Value> node_method = info[1];
+//   CHECK(node_method->IsFunction());
+//   static_cast<void>(node_method.As<Function>()->Call(context,
+//                                                      info.Holder(),
+//                                                      call_args.size(),
+//                                                      call_args.data()));
+// }
 
-#ifdef __POSIX__
-static void EnableInspectorIOThreadSignalHandler(int signo) {
-  uv_sem_post(&inspector_io_thread_semaphore);
-}
-
-inline void* InspectorIoThreadSignalThreadMain(void* unused) {
-  for (;;) {
-    uv_sem_wait(&inspector_io_thread_semaphore);
-    uv_async_send(&start_inspector_thread_async);
-  }
-  return nullptr;
-}
-
-static int RegisterDebugSignalHandler() {
-  // Start a watchdog thread for calling v8::Debug::DebugBreak() because
-  // it's not safe to call directly from the signal handler, it can
-  // deadlock with the thread it interrupts.
-  CHECK_EQ(0, uv_sem_init(&inspector_io_thread_semaphore, 0));
-  pthread_attr_t attr;
-  CHECK_EQ(0, pthread_attr_init(&attr));
-  // Don't shrink the thread's stack on FreeBSD.  Said platform decided to
-  // follow the pthreads specification to the letter rather than in spirit:
-  // https://lists.freebsd.org/pipermail/freebsd-current/2014-March/048885.html
-#ifndef __FreeBSD__
-  CHECK_EQ(0, pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN));
-#endif  // __FreeBSD__
-  CHECK_EQ(0, pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED));
-  sigset_t sigmask;
-  sigfillset(&sigmask);
-  CHECK_EQ(0, pthread_sigmask(SIG_SETMASK, &sigmask, &sigmask));
-  pthread_t thread;
-  const int err = pthread_create(&thread, &attr,
-                                 InspectorIoThreadSignalThreadMain, nullptr);
-  CHECK_EQ(0, pthread_sigmask(SIG_SETMASK, &sigmask, nullptr));
-  CHECK_EQ(0, pthread_attr_destroy(&attr));
-  if (err != 0) {
-    fprintf(stderr, "node[%d]: pthread_create: %s\n", getpid(), strerror(err));
-    fflush(stderr);
-    // Leave SIGUSR1 blocked.  We don't install a signal handler,
-    // receiving the signal would terminate the process.
-    return -err;
-  }
-  RegisterSignalHandler(SIGUSR1, EnableInspectorIOThreadSignalHandler);
-  // Unblock SIGUSR1.  A pending SIGUSR1 signal will now be delivered.
-  sigemptyset(&sigmask);
-  sigaddset(&sigmask, SIGUSR1);
-  CHECK_EQ(0, pthread_sigmask(SIG_UNBLOCK, &sigmask, nullptr));
-  return 0;
-}
-#endif  // __POSIX__
-
-
-#ifdef _WIN32
-DWORD WINAPI EnableDebugThreadProc(void* arg) {
-  uv_async_send(&start_inspector_thread_async);
-  return 0;
-}
-
-static int GetDebugSignalHandlerMappingName(DWORD pid, wchar_t* buf,
-                                            size_t buf_len) {
-  return _snwprintf(buf, buf_len, L"node-debug-handler-%u", pid);
-}
-
-static int RegisterDebugSignalHandler() {
-  wchar_t mapping_name[32];
-  HANDLE mapping_handle;
-  DWORD pid;
-  LPTHREAD_START_ROUTINE* handler;
-
-  pid = GetCurrentProcessId();
-
-  if (GetDebugSignalHandlerMappingName(pid,
-                                       mapping_name,
-                                       arraysize(mapping_name)) < 0) {
-    return -1;
-  }
-
-  mapping_handle = CreateFileMappingW(INVALID_HANDLE_VALUE,
-                                      nullptr,
-                                      PAGE_READWRITE,
-                                      0,
-                                      sizeof *handler,
-                                      mapping_name);
-  if (mapping_handle == nullptr) {
-    return -1;
-  }
-
-  handler = reinterpret_cast<LPTHREAD_START_ROUTINE*>(
-      MapViewOfFile(mapping_handle,
-                    FILE_MAP_ALL_ACCESS,
-                    0,
-                    0,
-                    sizeof *handler));
-  if (handler == nullptr) {
-    CloseHandle(mapping_handle);
-    return -1;
-  }
-
-  *handler = EnableDebugThreadProc;
-
-  UnmapViewOfFile(static_cast<void*>(handler));
-
-  return 0;
-}
-#endif  // _WIN32
-
-void InspectorConsoleCall(const v8::FunctionCallbackInfo<Value>& info) {
-  Isolate* isolate = info.GetIsolate();
-  HandleScope handle_scope(isolate);
-  Local<Context> context = isolate->GetCurrentContext();
-  CHECK_LT(2, info.Length());
-  std::vector<Local<Value>> call_args;
-  for (int i = 3; i < info.Length(); ++i) {
-    call_args.push_back(info[i]);
-  }
-  Environment* env = Environment::GetCurrent(isolate);
-  if (env->inspector_agent()->enabled()) {
-    Local<Value> inspector_method = info[0];
-    CHECK(inspector_method->IsFunction());
-    Local<Value> config_value = info[2];
-    CHECK(config_value->IsObject());
-    Local<Object> config_object = config_value.As<Object>();
-    Local<String> in_call_key = FIXED_ONE_BYTE_STRING(isolate, "in_call");
-    if (!config_object->Has(context, in_call_key).FromMaybe(false)) {
-      CHECK(config_object->Set(context,
-                               in_call_key,
-                               v8::True(isolate)).FromJust());
-      CHECK(!inspector_method.As<Function>()->Call(context,
-                                                   info.Holder(),
-                                                   call_args.size(),
-                                                   call_args.data()).IsEmpty());
-    }
-    CHECK(config_object->Delete(context, in_call_key).FromJust());
-  }
-
-  Local<Value> node_method = info[1];
-  CHECK(node_method->IsFunction());
-  static_cast<void>(node_method.As<Function>()->Call(context,
-                                                     info.Holder(),
-                                                     call_args.size(),
-                                                     call_args.data()));
-}
-
-void CallAndPauseOnStart(
-    const v8::FunctionCallbackInfo<v8::Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
-  CHECK_GT(args.Length(), 1);
-  CHECK(args[0]->IsFunction());
-  std::vector<v8::Local<v8::Value>> call_args;
-  for (int i = 2; i < args.Length(); i++) {
-    call_args.push_back(args[i]);
-  }
-
-  env->inspector_agent()->PauseOnNextJavascriptStatement("Break on start");
-  v8::MaybeLocal<v8::Value> retval =
-      args[0].As<v8::Function>()->Call(env->context(), args[1],
-                                       call_args.size(), call_args.data());
-  args.GetReturnValue().Set(retval.ToLocalChecked());
-}
+// void CallAndPauseOnStart(
+//     const v8::FunctionCallbackInfo<v8::Value>& args) {
+//   Environment* env = Environment::GetCurrent(args);
+//   CHECK_GT(args.Length(), 1);
+//   CHECK(args[0]->IsFunction());
+//   std::vector<v8::Local<v8::Value>> call_args;
+//   for (int i = 2; i < args.Length(); i++) {
+//     call_args.push_back(args[i]);
+//   }
+//
+//   env->inspector_agent()->PauseOnNextJavascriptStatement("Break on start");
+//   v8::MaybeLocal<v8::Value> retval =
+//       args[0].As<v8::Function>()->Call(env->context(), args[1],
+//                                        call_args.size(), call_args.data());
+//   args.GetReturnValue().Set(retval.ToLocalChecked());
+// }
 }  // namespace
 
 // Used in NodeInspectorClient::currentTimeMS() below.
@@ -385,20 +267,9 @@ bool Agent::Start(v8::Platform* platform, const char* path,
   inspector_ =
       std::unique_ptr<NodeInspectorClient>(
           new NodeInspectorClient(parent_env_, platform));
-  inspector_->contextCreated(parent_env_->context(), "Node.js Main Context");
+  inspector_->contextCreated(parent_env_->context(), "Main Process Context");
   platform_ = platform;
-  if (options.inspector_enabled()) {
-    return StartIoThread();
-  } else {
-    CHECK_EQ(0, uv_async_init(uv_default_loop(),
-                              &start_inspector_thread_async,
-                              StartInspectorIoThreadAsyncCallback));
-    start_inspector_thread_async.data = this;
-    uv_unref(reinterpret_cast<uv_handle_t*>(&start_inspector_thread_async));
-
-    RegisterDebugSignalHandler();
-    return true;
-  }
+  return StartIoThread();
 }
 
 bool Agent::StartIoThread() {
@@ -409,7 +280,7 @@ bool Agent::StartIoThread() {
 
   enabled_ = true;
   io_ = std::unique_ptr<InspectorIo>(
-      new InspectorIo(parent_env_, platform_, path_, debug_options_));
+      new InspectorIo(this, parent_env_, platform_, path_, debug_options_));
   if (!io_->Start()) {
     inspector_.reset();
     return false;
@@ -496,11 +367,11 @@ void Agent::PauseOnNextJavascriptStatement(const std::string& reason) {
 // static
 void Agent::InitJSBindings(Local<Object> target, Local<Value> unused,
                            Local<Context> context, void* priv) {
-  Environment* env = Environment::GetCurrent(context);
-  Agent* agent = env->inspector_agent();
-  env->SetMethod(target, "consoleCall", InspectorConsoleCall);
-  if (agent->debug_options_.wait_for_connect())
-    env->SetMethod(target, "callAndPauseOnStart", CallAndPauseOnStart);
+  // Environment* env = Environment::GetCurrent(context);
+  // Agent* agent = env->inspector_agent();
+  // env->SetMethod(target, "consoleCall", base::Bind(InspectorConsoleCall, agent);
+  // if (agent->debug_options_.wait_for_connect())
+  //   env->SetMethod(target, "callAndPauseOnStart", CallAndPauseOnStart);
 }
 }  // namespace inspector
 }  // namespace node
