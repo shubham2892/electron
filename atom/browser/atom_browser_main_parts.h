@@ -21,7 +21,7 @@ class AtomBindings;
 class Browser;
 class JavascriptEnvironment;
 class NodeBindings;
-class NodeDebugger;
+class NodeInspector;
 class NodeEnvironment;
 class BridgeTaskRunner;
 
@@ -83,7 +83,7 @@ class AtomBrowserMainParts : public brightray::BrowserMainParts {
   std::unique_ptr<NodeBindings> node_bindings_;
   std::unique_ptr<AtomBindings> atom_bindings_;
   std::unique_ptr<NodeEnvironment> node_env_;
-  std::unique_ptr<NodeDebugger> node_debugger_;
+  std::unique_ptr<NodeInspector> node_inspector_;
 
   base::Timer gc_timer_;
 
