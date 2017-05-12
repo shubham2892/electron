@@ -286,27 +286,6 @@ bool Agent::StartIoThread() {
     return false;
   }
 
-  v8::Isolate* isolate = parent_env_->isolate();
-
-  // Send message to enable debug in workers
-  HandleScope handle_scope(isolate);
-  Local<Object> process_object = parent_env_->process_object();
-  Local<Value> emit_fn =
-      process_object->Get(FIXED_ONE_BYTE_STRING(isolate, "emit"));
-  // In case the thread started early during the startup
-  if (!emit_fn->IsFunction())
-    return true;
-
-  Local<Object> message = Object::New(isolate);
-  message->Set(FIXED_ONE_BYTE_STRING(isolate, "cmd"),
-               FIXED_ONE_BYTE_STRING(isolate, "NODE_DEBUG_ENABLED"));
-  Local<Value> argv[] = {
-    FIXED_ONE_BYTE_STRING(isolate, "internalMessage"),
-    message
-  };
-  MakeCallback(parent_env_, process_object.As<Value>(), emit_fn.As<Function>(),
-               arraysize(argv), argv);
-
   return true;
 }
 
