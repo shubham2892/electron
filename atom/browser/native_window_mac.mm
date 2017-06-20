@@ -171,6 +171,7 @@ bool ScopedDisableResize::disable_resize_ = false;
  @private
   atom::NativeWindowMac* shell_;
   bool is_zooming_;
+  bool is_resizable_;
 }
 - (id)initWithShell:(atom::NativeWindowMac*)shell;
 @end
@@ -324,6 +325,11 @@ bool ScopedDisableResize::disable_resize_ = false;
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification*)notification {
+  // Set the resizable flag to true before entering full screen for it work
+  // correctly
+  is_resizable_ = shell_->IsResizable();
+  shell_->SetResizable(true);
+
   // Hide the native toolbar before entering fullscreen, so there is no visual
   // artifacts.
   if (base::mac::IsAtLeastOS10_10() &&
@@ -380,6 +386,8 @@ bool ScopedDisableResize::disable_resize_ = false;
 }
 
 - (void)windowDidExitFullScreen:(NSNotification*)notification {
+  // Restore the resizable flag after exiting full screen
+  shell_->SetResizable(is_resizable_);
   shell_->NotifyWindowLeaveFullScreen();
 }
 

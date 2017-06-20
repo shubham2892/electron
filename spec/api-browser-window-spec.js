@@ -2074,6 +2074,24 @@ describe('BrowserWindow module', function () {
     })
   })
 
+  describe('full screen state resizable property', function () {
+    it('resizable flag should be set to true and restored', function (done) {
+      if (process.platform !== 'darwin') return
+
+      w.destroy()
+      w = new BrowserWindow({resizable: false})
+      w.once('enter-full-screen', () => {
+        assert.equal(w.isResizable(), true)
+        w.setFullScreen(false)
+      })
+      w.once('leave-full-screen', () => {
+        assert.equal(w.isResizable(), false)
+        done()
+      })
+      w.setFullScreen(true)
+    })
+  })
+
   describe('BrowserWindow.restore()', function () {
     it('should restore the previous window size', function () {
       if (w != null) w.destroy()
